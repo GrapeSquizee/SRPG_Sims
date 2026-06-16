@@ -12,11 +12,35 @@
 - 장비창, 도구, 기억 로그
 - 반복 사건을 피하려는 novelty log
 - 선택형 Ollama 연결
+- OpenAI-compatible API 연결
 
 ## 로컬 규칙 모드 실행
 
 ```powershell
 python main.py
+```
+
+## OpenAI-compatible AI 모드 실행
+
+OpenAI API 또는 OpenAI-compatible 서버를 사용할 수 있습니다.
+
+PowerShell:
+
+```powershell
+$env:OPENAI_API_KEY="YOUR_API_KEY"
+python main.py --provider openai-compatible --model gpt-4.1-mini
+```
+
+Base URL을 직접 지정할 수도 있습니다.
+
+```powershell
+python main.py --provider openai-compatible --base-url https://api.openai.com/v1 --model gpt-4.1-mini
+```
+
+OpenRouter, vLLM, LM Studio, LiteLLM처럼 `/chat/completions`를 제공하는 서버도 같은 방식으로 붙일 수 있습니다.
+
+```powershell
+python main.py --provider openai-compatible --base-url http://localhost:1234/v1 --model local-model-name --api-key dummy
 ```
 
 ## Ollama AI 모드 실행
@@ -31,6 +55,12 @@ ollama pull qwen2.5:3b
 
 ```powershell
 python main.py --ai --model qwen2.5:3b
+```
+
+또는 명시적으로 provider를 지정할 수 있습니다.
+
+```powershell
+python main.py --provider ollama --model qwen2.5:3b
 ```
 
 다른 작은 모델을 쓰고 싶다면 예를 들어 다음처럼 바꿀 수 있습니다.
