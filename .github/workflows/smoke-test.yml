@@ -1,0 +1,29 @@
+name: Smoke Test
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  cli:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Compile
+        run: python -m py_compile main.py
+
+      - name: Run local CLI smoke test
+        run: |
+          python main.py <<'EOF'
+          CI Tester
+          광장에 말을 걸고 주변 냄새를 조사한다
+          /ai
+          /quit
+          EOF
