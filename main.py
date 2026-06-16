@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import random
 import sys
 import textwrap
@@ -220,6 +221,93 @@ JSON 형식:
         return result if isinstance(result, dict) else None
 
 
+class OpenAICompatibleModel:
+    def __init__(self, model: str, base_url: str, api_key: str, timeout: int) -> None:
+        self.model = model
+        self.base_url = base_url.rstrip("/")
+        self.api_key = api_key
+        self.timeout = timeout
+        self.label = f"openai-compatible:{model}"
+        self.last_error: Optional[str] = None
+
+    def debate(self, prompt: str, agents: Sequence[Agent], world: World, player: Player) -> Optional[Dict[str, Any]]:
+        agent_text = "\n".join(
+            f"- {a.name}: kind={a.kind}, voice={a.voice}, bias={a.bias}, wants={', '.join(a.wants)}"
+            for a in agents
+        )
+        return self._chat_json(
+            "너는 텍스트 기반 SRPG AI Sims의 콘텐츠 디렉터다. 모든 사물, 장소, 감각, 행동이 에이전트처럼 발언한다. "
+            "말은 되지만 엉뚱하고 재미있게 만들고, 이전 기억을 반복하지 않는다. 반드시 한국어 JSON 객체만 출력한다.",
+            f"""
+위치: {world.location}
+분위기: {world.mood}
+위험도: {world.danger}
+현재 계획 단계: {world.plan.current}
+플레이어 스탯: {player.stats}
+최근 기억: {player.memory[-5:]}
+최근 novelty key: {world.novelty_log[-8:]}
+유저 입력: {prompt}
+참여 에이전트:
+{agent_text}
+
+JSON 형식:
+{{"statements":["에이전트명: 짧은 주장"],"decision":"토론 결론 한 문단","mood":"선택 사항","location":"선택 사항"}}
+""",
+        )
+
+    def event(
+        self, prompt: str, decision: str, stat: str, success: bool, world: World, player: Player
+    ) -> Optional[Dict[str, Any]]:
+        return self._chat_json(
+            "너는 SRPG 로그 작가다. 판정 결과를 두 문장 이하의 게임 이벤트로 만든다. 보상 수치는 바꾸지 않는다. 한국어 JSON 객체만 출력한다.",
+            f"""
+유저 입력: {prompt}
+토론 결론: {decision}
+판정 스탯: {stat}
+성공 여부: {success}
+위치: {world.location}
+분위기: {world.mood}
+위험도: {world.danger}
+최근 기억: {player.memory[-5:]}
+
+JSON 형식:
+{{"event":"사건 결과","reward_tool":"선택 사항 또는 빈 문자열","reward_equipment":"선택 사항 또는 빈 문자열","mood":"선택 사항"}}
+""",
+        )
+
+    def _chat_json(self, system: str, user: str) -> Optional[Dict[str, Any]]:
+        payload = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            "temperature": 0.95,
+            "top_p": 0.9,
+            "max_tokens": 700,
+            "response_format": {"type": "json_object"},
+        }
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        request = urllib.request.Request(
+            f"{self.base_url}/chat/completions",
+            data=json.dumps(payload).encode("utf-8"),
+            headers=headers,
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                raw = json.loads(response.read().decode("utf-8"))
+            content = raw["choices"][0]["message"]["content"]
+            result = json.loads(content)
+        except (KeyError, IndexError, OSError, urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+            self.last_error = str(exc)
+            return None
+        self.last_error = None
+        return result if isinstance(result, dict) else None
+
+
 def default_agents() -> List[Agent]:
     return [
         Agent("빚쟁이 촛대", "object", "건조하지만 과장된", "risk", ("대가를 먼저 계산하는", "빛을 담보로 협상하는")),
@@ -356,17 +444,42 @@ def render_status(player: Player, world: World, model_label: str) -> str:
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="SRPG 스타일 텍스트 AI Sims")
-    parser.add_argument("--ai", action="store_true", help="Ollama 콘텐츠 모델을 사용한다.")
-    parser.add_argument("--model", default="qwen2.5:3b", help="Ollama 모델 이름. 예: qwen2.5:3b, llama3.2:3b")
+    parser.add_argument("--ai", action="store_true", help="하위 호환 옵션. 지정하면 Ollama provider를 사용한다.")
+    parser.add_argument(
+        "--provider",
+        choices=["local", "ollama", "openai-compatible"],
+        default=None,
+        help="콘텐츠 모델 provider",
+    )
+    parser.add_argument("--model", default="qwen2.5:3b", help="모델 이름")
     parser.add_argument("--ollama-url", default="http://localhost:11434", help="Ollama 서버 URL")
-    parser.add_argument("--timeout", type=int, default=45, help="Ollama 요청 타임아웃 초")
+    parser.add_argument(
+        "--base-url",
+        default=os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1"),
+        help="OpenAI-compatible API base URL. 예: https://api.openai.com/v1",
+    )
+    parser.add_argument(
+        "--api-key",
+        default=os.environ.get("OPENAI_API_KEY", ""),
+        help="OpenAI-compatible API key. 미지정 시 OPENAI_API_KEY 환경변수를 사용한다.",
+    )
+    parser.add_argument("--timeout", type=int, default=45, help="모델 요청 타임아웃 초")
     return parser.parse_args(argv)
+
+
+def build_model(args: argparse.Namespace) -> ContentModel:
+    provider = args.provider or ("ollama" if args.ai else "local")
+    if provider == "ollama":
+        return OllamaModel(args.model, args.ollama_url, args.timeout)
+    if provider == "openai-compatible":
+        return OpenAICompatibleModel(args.model, args.base_url, args.api_key, args.timeout)
+    return LocalModel()
 
 
 def run(argv: Optional[Sequence[str]] = None) -> None:
     configure_console()
     args = parse_args(argv)
-    model: ContentModel = OllamaModel(args.model, args.ollama_url, args.timeout) if args.ai else LocalModel()
+    model = build_model(args)
     game = Game(model)
     world = World()
 
